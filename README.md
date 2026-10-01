@@ -178,6 +178,122 @@ speech-to-text).
 > paid plan with a persistent disk (set `JOBS_DIR` to the disk's mount path). A step
 > that is running when the server restarts is marked as interrupted and can be re-run.
 
+## 5. Deploy to a Windows VM (current production setup)
+
+The app also runs on an Azure Windows Server VM as two always-on Windows services:
+`SubtitleReview` (uvicorn) and `Caddy` (HTTPS reverse proxy). The VM's disk is
+persistent, so the full 24-hour job retention works here — unlike Render's free plan.
+
+| | |
+|---|---|
+| Host | Azure Windows Server VM, South India (shared with a PostgreSQL instance) |
+| App directory | `E:\apps\bg-subtitle-review` — a persistent data disk |
+| Virtualenv | `E:\apps\bg-subtitle-review\myenv` |
+| App service | `SubtitleReview` — uvicorn on `127.0.0.1:8000`, not reachable from outside |
+| Proxy service | `Caddy` — terminates TLS on 443, forwards to 8000, renews its certificate automatically |
+| Public URL | `https://bg-subtitle.southindia.cloudapp.azure.com` |
+| Secrets | `E:\apps\bg-subtitle-review\.env` — a plain VM has no App Settings |
+| Logs | `E:\apps\bg-subtitle-review\logs\`, `C:\tools\caddy-*.log` (rotated at 10 MB) |
+
+> **Never install to `D:`.** On Azure Windows VMs that letter is the *temporary*
+> disk: it is wiped whenever the VM is deallocated, resized, or moved to another
+> host. Check with `vol D:` — a label of "Temporary Storage" or the presence of
+> `D:\DATALOSS_WARNING_README.txt` confirms it.
+
+### Operations cheat sheet
+
+Run these from an **Administrator** Command Prompt.
+
+```cmd
+:: status and health
+sc query SubtitleReview
+sc query Caddy
+curl http://127.0.0.1:8000/healthz
+
+:: start / stop / restart
+net stop SubtitleReview
+net start SubtitleReview
+C:\tools\nssm.exe restart SubtitleReview
+
+:: read the logs
+type E:\apps\bg-subtitle-review\logs\err.log
+type C:\tools\caddy-err.log
+
+:: deploy an update
+cd /d E:\apps\bg-subtitle-review
+net stop SubtitleReview
+git pull
+myenv\Scripts\pip.exe install -r requirements.txt
+net start SubtitleReview
+
+:: change a secret (a restart is required to load it)
+notepad E:\apps\bg-subtitle-review\.env
+C:\tools\nssm.exe restart SubtitleReview
+
+:: inspect or remove a service
+C:\tools\nssm.exe edit SubtitleReview
+C:\tools\nssm.exe remove SubtitleReview confirm
+```
+
+`/healthz` returns `{"ok":true,"configured":true}` once the service is up and has
+found its `.env`. `"configured":false` means `APP_PASSWORD` is unset — almost always
+a working-directory problem (see Gotchas).
+
+No cleanup job is needed: the app deletes jobs older than `RETENTION_HOURS` itself.
+
+### Rebuilding the VM from scratch
+
+1. **Python 3.12** — install with `InstallAllUsers=1 PrependPath=1`, then reopen the shell.
+2. **Code and dependencies** — `git clone` into `E:\apps\bg-subtitle-review`, then
+   `python -m venv myenv` and `myenv\Scripts\pip.exe install -r requirements.txt`.
+   `ffmpeg` comes bundled via `imageio-ffmpeg`; nothing extra to install.
+3. **Secrets** — create `.env` (see [Setup](#1-setup-local)).
+4. **Test manually** — `myenv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000`,
+   then `curl http://127.0.0.1:8000/healthz`. Stop it before installing the service.
+5. **Install NSSM** to `C:\tools`, then register the service. `AppDirectory` is
+   mandatory:
+
+   ```cmd
+   C:\tools\nssm.exe install SubtitleReview "E:\apps\bg-subtitle-review\myenv\Scripts\python.exe" "-m uvicorn app:app --host 127.0.0.1 --port 8000"
+   C:\tools\nssm.exe set SubtitleReview AppDirectory "E:\apps\bg-subtitle-review"
+   C:\tools\nssm.exe set SubtitleReview AppStdout "E:\apps\bg-subtitle-review\logs\out.log"
+   C:\tools\nssm.exe set SubtitleReview AppStderr "E:\apps\bg-subtitle-review\logs\err.log"
+   C:\tools\nssm.exe set SubtitleReview AppRotateFiles 1
+   C:\tools\nssm.exe set SubtitleReview AppRotateBytes 10485760
+   C:\tools\nssm.exe set SubtitleReview Start SERVICE_AUTO_START
+   C:\tools\nssm.exe start SubtitleReview
+   ```
+
+6. **Networking** — give the VM a DNS label (portal → VM → Overview → DNS name),
+   open TCP 80 and 443 in *both* the Azure NSG and the Windows firewall
+   (`netsh advfirewall firewall add rule name="HTTPS" dir=in action=allow protocol=TCP localport=443`).
+7. **Caddy** — download `caddy.exe` to `C:\tools`, write `C:\tools\Caddyfile`:
+
+   ```
+   bg-subtitle.southindia.cloudapp.azure.com {
+       reverse_proxy 127.0.0.1:8000
+   }
+   ```
+
+   then register it the same way (`AppDirectory` `C:\tools`, auto-start, log files).
+
+### Gotchas
+
+- **`AppDirectory` must be the app folder.** `app.py` and `pipeline.py` both call
+  `load_dotenv()`, which searches upward from the *working directory*. Without it the
+  service starts in `System32`, never finds `.env`, and every job fails on missing
+  credentials while `/healthz` reports `"configured":false`.
+- **The Caddyfile hostname must match the VM's DNS name exactly.** A mismatch means
+  Caddy holds no certificate for the name the browser asks for, and the handshake
+  fails with `ERR_SSL_PROTOCOL_ERROR` — which looks like a broken app but is not.
+- **Port 80 must be open in the NSG,** not just the Windows firewall. Let's Encrypt
+  validates over HTTP; without it Caddy can never issue or renew a certificate.
+- **Keep uvicorn on `127.0.0.1`.** The password is sent in a plain header, so all
+  traffic must pass through Caddy's TLS.
+- **Run one instance only,** and leave PostgreSQL's port 5432 closed to the internet.
+- **A full disk takes PostgreSQL down too,** since both share this VM. Watch free
+  space; audio uploads can reach `MAX_AUDIO_BYTES` (300 MB) each.
+
 ## Security notes
 
 - Access is gated by a single shared `APP_PASSWORD`. Use a long random value and
