@@ -31,12 +31,11 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
     source = Path(args.source)
     with tempfile.TemporaryDirectory() as tmp:
-        compact = Path(tmp) / "audio.mp3"
-        transcribe.make_compact_audio(source, compact)
-        cues = transcribe.transcribe_audio(compact, context_hint=args.hint, progress=lambda msg: print(msg))
+        speech = transcribe.make_speech_audio(source, Path(tmp))
+        cues = transcribe.transcribe_audio(speech, context_hint=args.hint, progress=lambda msg: print(msg))
     entries = [
         (pipeline.seconds_to_srt_ts(c["start"]), pipeline.seconds_to_srt_ts(c["end"]), c["text"])
-        for c in cues
+        for c in cues if c["text"]
     ]
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -45,9 +44,15 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
         path = out_dir / f"{pipeline.safe_stem(source.name)}_telugu.{fmt}"
         path.write_text(pipeline.format_subtitles(entries, fmt), encoding="utf-8")
         print(f"Telugu {fmt.upper()}: {path}")
-    low = [i for i, c in enumerate(cues, 1) if c["confidence"] is not None and c["confidence"] < transcribe.LOW_CONFIDENCE]
-    if low:
-        print(f"Low-confidence cues to check first: {', '.join(map(str, low))}")
+    missing = [c for c in cues if not c["text"]]
+    if missing:
+        spans = ", ".join(f"{pipeline.seconds_to_srt_ts(c['start'])}-{pipeline.seconds_to_srt_ts(c['end'])}" for c in missing)
+        print(f"No text recognised (left out of the files; listen and add them): {spans}")
+    numbered = [c for c in cues if c["text"]]  # cue numbers as in the written files
+    for flag, label in (("recovered", "Re-transcribed cues to check"), ("low", "Low-confidence cues to check")):
+        nums = [str(i) for i, c in enumerate(numbered, 1) if c["review"] == flag]
+        if nums:
+            print(f"{label}: {', '.join(nums)}")
 
 
 def cmd_translate(args: argparse.Namespace) -> None:

@@ -13,7 +13,7 @@ subtitles plus an Excel review workbook. Comes with a CLI and a responsive web U
 ```
 audio (.mp3 …) ── speech-to-text ──┐
                                    ├─► 1. Telugu subtitles: human edits cues, listens to
-.sbv / .srt ───────────────────────┘      low-confidence ones, downloads SBV/SRT
+.sbv / .srt ───────────────────────┘      flagged ones, downloads SBV/SRT
                                               │
                                               ▼  translate (Azure OpenAI)
                                    2. English review: human writes corrections,
@@ -36,17 +36,46 @@ Why this shape — each step follows published practice:
 ### Speech-to-text: Azure AI Speech (Central India)
 
 Audio is transcribed by **Azure AI Speech fast transcription** with the Telugu
-(`te-IN`) model. It returns every word with its timestamp; the app groups words
-into subtitle-sized cues at the speaker's pauses and carries the recognizer's
-confidence so the editor can sort and highlight the weakest cues for review.
+(`te-IN`) model. Tested on a 26-minute discourse, its raw output had two flaws
+that `transcribe.py` now corrects:
+
+- **Dropped speech.** Sent as a 64 kbps MP3, about 2.5 minutes of clear speech
+  (including the opening mantra) came back as "." or nothing. Lossless audio (see
+  *Audio sent* below) fixed that. As a safety net, stretches with speech but no text
+  are re-sent as short clips, split at silences. Whatever stays empty becomes a
+  blank **red** cue for the reviewer to fill in or delete, never a silent gap.
+- **Word timings.** The te-IN word timestamps squeeze runs of words into 0.08 s
+  and stretch single words over pauses, so text appeared up to 7 s early. Words
+  are re-timed onto the speech heard in the audio, and cues are cut at real pauses
+  (≤ 7 s, ≥ 5/6 s). Timing by speaking pace alone still put a word on the wrong side
+  of 1 pause in 5 (the speaker's pace varies), so **each cue's own audio is then
+  transcribed on its own** and every word goes to the cue whose clip heard it.
+  Measured against reference word times on 8.5 minutes of the file: pauses with a
+  word on the wrong side fell from 20% to 0%, and words on screen while spoken rose
+  from 95% to 100%. This also caught the closing "జయ శ్రీమన్నారాయణ", which the long
+  job missed. It doubles the speech-to-text cost and adds about a minute per
+  26 minutes of audio (one request per cue, 6 at a time; Azure allows 600 requests
+  a minute per resource).
+
+Cues are flagged for review as *no text recognised*, *re-transcribed* or *low
+confidence*. Azure's confidence is coarse (one score per ~20 s), so "low" means
+below 0.77 or in the file's weakest tenth, whichever is lower. Spoken numbers that
+Azure writes as digits ("1 చేతిలో") are spelled out again ("ఒక చేతిలో"). The
+optional names/terms list is sent as a phrase list, but in a test on Telugu audio
+it changed nothing, so check those terms by ear.
 
 - **Region:** Azure Speech is *not* available in South India; **Central India**
   supports fast transcription, and audio is processed only in the resource's region
   ([regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/regions)).
 - **Tier:** Standard (S0). The Free (F0) tier has no fast transcription
   ([quotas](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits)).
-- **Cost:** ₹34.40 ($0.36) per audio hour, billed per second — see [Cost per file](#cost-per-file).
-- **Limits:** under 5 hours and 500 MB per file (uploads are compressed to mono MP3 first).
+- **Cost:** ₹34.40 ($0.36) per audio hour, billed per second; each file's audio is
+  sent about twice (the whole file, then cue by cue) — see [Cost per file](#cost-per-file).
+- **Limits:** under 5 hours and 500 MB per file.
+- **Audio sent:** 16 kHz mono **lossless FLAC** (16 kHz MP3 at 64 kbps if the FLAC
+  would exceed 300 MB, about 2.5 hours). On the 26-minute test file, the 64 kbps
+  48 kHz MP3 sent before lost 2 minutes of speech, including the opening mantra,
+  and 13% of the text; lossless lost none. The editor still plays a small MP3 copy.
 - **Optional model:** `AZURE_SPEECH_MODEL=MAI-Transcribe-2` switches to Microsoft's
   newer model, which lists Telugu, on the same resource — it is in *public preview*
   (no SLA) ([MAI-Transcribe](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe)).
@@ -77,12 +106,12 @@ because those pages show prices only after sign-in / region selection.
 
 | Step | Azure service (region) | List price | Usage for this file | Cost |
 |---|---|---|---|---|
-| Speech-to-text | AI Speech fast transcription (Central India) | ₹34.40 ($0.36) per audio hour, billed per second | 26.6 min of audio | **₹15.25** ($0.16) |
+| Speech-to-text | AI Speech fast transcription (Central India) | ₹34.40 ($0.36) per audio hour, billed per second | 26.6 min of audio, sent twice (whole file + cue by cue) | **₹30.50** ($0.32) |
 | Translation | OpenAI gpt-5, Global Standard (South India) | per 1M tokens: input ₹119.43 ($1.25), output ₹955.46 ($10.00) | 56K input + 71K output tokens, 11 calls, ~4 min | **₹74.72** ($0.78) |
 | AI review *(optional)* | same gpt-5 deployment | same | 119K input + 135K output tokens, 37 calls, ~6 min | **₹142.72** ($1.49) |
-| **Total** | | | | **≈ ₹90 ($0.94)** without AI review · **≈ ₹233 ($2.44)** with it |
+| **Total** | | | | **≈ ₹105 ($1.10)** without AI review · **≈ ₹248 ($2.59)** with it |
 
-- **Scales with audio length:** roughly ₹200 per audio hour without AI review, ₹525 with it.
+- **Scales with audio length:** roughly ₹235 per audio hour without AI review, ₹560 with it.
 - **Reasoning tokens drive the cost:** gpt-5 "thinks" before answering, and that
   hidden reasoning (83% of translation output, 93% of review output here) is billed as
   output. Token counts vary a little between runs.
@@ -144,7 +173,9 @@ python app.py
 2. Upload an audio file (tick SBV and/or SRT; optionally list names/terms that
    occur in the recording) or a Telugu `.sbv`/`.srt`.
 3. **Telugu subtitles** tab: play cues, fix recognition errors (start with
-   *Least confident first*), adjust timings, insert/delete cues, save, download.
+   *Flagged & least confident first*), type the words into red blank cues or delete
+   them, adjust timings, insert/delete cues, save, download. Blank cues are left out
+   of the downloads and the translation.
 4. **Save & translate** → **English review** tab: type corrections where needed.
    Reading-speed and line-length warnings are shown per cue.
 5. Optional **Run AI review**: flags likely errors with a suggested fix; choose
