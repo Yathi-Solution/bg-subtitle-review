@@ -53,9 +53,14 @@ that `transcribe.py` now corrects:
   Measured against reference word times on 8.5 minutes of the file: pauses with a
   word on the wrong side fell from 20% to 0%, and words on screen while spoken rose
   from 95% to 100%. This also caught the closing "జయ శ్రీమన్నారాయణ", which the long
-  job missed. It doubles the speech-to-text cost and adds about a minute per
+  job missed. It doubles the speech-to-text cost and adds about two minutes per
   26 minutes of audio (one request per cue, 6 at a time; Azure allows 600 requests
   a minute per resource).
+- **Cue breaks.** Cues that touch with no pause between them (cut by the length
+  limits) are joined and re-cut at the best break: a real pause, else a sentence
+  end, else a comma. On the test file, breaks inside continuous speech fell from 81
+  to 9, and mid-phrase breaks ("ఉండే భగవంతుడి | వల్ల") from 27 to 1. Long lines wrap
+  after punctuation when it is near the middle.
 
 Cues are flagged for review as *no text recognised*, *re-transcribed* or *low
 confidence*. Azure's confidence is coarse (one score per ~20 s), so "low" means
