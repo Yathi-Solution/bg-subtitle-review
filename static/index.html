@@ -189,6 +189,7 @@
     }
     .cue.playing { border-color: var(--brand-2); background: var(--hl); }
     .cue.low { border-left: 4px solid var(--warn); }
+    .cue.missing { border-left: 4px solid var(--err); }
     .num { font-weight: 700; color: var(--muted); font-size: 0.85rem; padding-top: 8px; }
     .times { display: grid; gap: 6px; }
     .times input { padding: 6px 8px; font-size: 0.82rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
@@ -270,7 +271,7 @@
           <div id="hintField" class="field hidden">
             <label for="contextHint">Names &amp; terms <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
             <input id="contextHint" type="text" class="te" placeholder="e.g. శ్రీమన్నారాయణ, భగవద్గీత, అర్జునుడు" />
-            <p class="hint">Comma-separated names and Sanskrit terms that occur in this recording. Azure Speech is biased toward these spellings.</p>
+            <p class="hint">Comma-separated names and Sanskrit terms that occur in this recording, sent to Azure Speech as a phrase list. In a test on Telugu audio it made no difference, so still check these terms in the transcript.</p>
           </div>
 
           <button id="runBtn" type="submit">Upload &amp; start</button>
@@ -318,8 +319,8 @@
           <div class="toolbar" style="margin:10px 0 0;">
             <select id="sourceFilter" class="filter" aria-label="Filter cues">
               <option value="all">All cues, in order</option>
-              <option value="worst">Least confident first</option>
-              <option value="low">Low confidence only</option>
+              <option value="worst">Flagged &amp; least confident first</option>
+              <option value="flagged">Flagged only</option>
             </select>
             <span class="grow"></span>
             <button id="saveSourceBtn" class="ghost" type="button">Save changes</button>
@@ -384,7 +385,15 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const KEY = "subtitle_app_pw";
-    const LOW_CONF = 0.77, MAX_CPS = 20, MAX_LINE = 42;
+    const MAX_CPS = 20, MAX_LINE = 42;
+    // Why the server flagged a Telugu cue for review (see transcribe.build_cues).
+    const REVIEW_FLAG = {
+      missing: { label: "no text recognised", badge: "err", rank: 0,
+        title: "Azure recognised no words here, even when this stretch was sent again on its own. Play it and type what is said, or delete the cue if it is music or silence." },
+      recovered: { label: "re-transcribed", badge: "warn", rank: 1,
+        title: "Azure missed this stretch on the first pass; this text comes from sending it again on its own. Check it against the audio." },
+      low: { label: "low confidence", badge: "warn", rank: 2, title: "Speech recognition confidence is among the lowest in this file." },
+    };
     const BUSY = new Set(["transcribing", "translating", "reviewing"]);
     const STATE_LABEL = {
       transcribing: "Transcribing audio",
@@ -708,12 +717,15 @@
       const filter = $("sourceFilter").value;
       list.innerHTML = "";
       const order = source.map((_, i) => i);
-      const conf = (i) => (source[i].confidence === null || source[i].confidence === undefined ? 2 : source[i].confidence);
-      if (filter === "worst") order.sort((a, b) => conf(a) - conf(b));
+      const rank = (i) => {
+        const c = source[i], f = REVIEW_FLAG[c.review];
+        return f ? f.rank : 3 + (c.confidence === null || c.confidence === undefined ? 1 : c.confidence);
+      };
+      if (filter === "worst") order.sort((a, b) => rank(a) - rank(b));
       order.forEach((i) => {
         const c = source[i];
-        const low = c.confidence !== null && c.confidence !== undefined && c.confidence < LOW_CONF;
-        if (filter === "low" && !low) return;
+        const flag = REVIEW_FLAG[c.review];
+        if (filter === "flagged" && !flag) return;
         const startIn = el("input", { type: "text", value: c.start, "aria-label": "Start time", inputmode: "decimal" });
         const endIn = el("input", { type: "text", value: c.end, "aria-label": "End time", inputmode: "decimal" });
         const timeChange = (inp, key) => () => {
@@ -723,12 +735,14 @@
         };
         startIn.addEventListener("change", timeChange(startIn, "start"));
         endIn.addEventListener("change", timeChange(endIn, "end"));
-        const ta = el("textarea", { class: "te", rows: 2, value: c.text, "aria-label": `Cue ${i + 1} text` });
+        const ta = el("textarea", { class: "te", rows: 2, value: c.text, "aria-label": `Cue ${i + 1} text`,
+          placeholder: c.review === "missing" ? "No words were recognised here. Play it and type what is said, or delete this cue if it is music or silence." : null });
         ta.addEventListener("input", () => { c.text = ta.value; markSourceDirty(); });
         const dur = (tsToSec(c.end) - tsToSec(c.start)).toFixed(1);
         const conf = c.confidence === null || c.confidence === undefined ? null
-          : el("span", { class: "badge " + (low ? "warn" : "ok"), title: "Speech recognition confidence" }, `${Math.round(c.confidence * 100)}%`);
-        const row = el("div", { class: "cue" + (low ? " low" : ""), "data-i": i },
+          : el("span", { class: "badge " + (c.review === "low" ? "warn" : "ok"), title: "Speech recognition confidence" }, `${Math.round(c.confidence * 100)}%`);
+        const why = flag ? el("span", { class: "badge " + flag.badge, title: flag.title }, flag.label) : null;
+        const row = el("div", { class: "cue" + (c.review === "missing" ? " missing" : flag ? " low" : ""), "data-i": i },
           el("div", { class: "num" }, "#" + (i + 1)),
           el("div", { class: "times" }, startIn, endIn),
           ta,
@@ -738,11 +752,13 @@
               el("button", { class: "icon", type: "button", title: "Insert a cue after this one", onclick: () => insertCue(i) }, "+"),
               el("button", { class: "icon", type: "button", title: "Delete this cue", onclick: () => deleteCue(i) }, "✕")),
             el("span", { class: "badge" }, dur + " s"),
-            conf));
+            why, conf));
         list.append(row);
       });
-      const lowCount = source.filter((c) => c.confidence !== null && c.confidence !== undefined && c.confidence < LOW_CONF).length;
-      $("sourceSummary").textContent = `${source.length} cues` + (job.has_audio ? ` · ${lowCount} low-confidence (orange) — play and check these first` : "");
+      const count = (f) => source.filter((c) => c.review === f).length;
+      const flagged = [["missing", "with no text (red)"], ["recovered", "re-transcribed"], ["low", "low-confidence"]]
+        .filter(([f]) => count(f)).map(([f, label]) => `${count(f)} ${label}`);
+      $("sourceSummary").textContent = `${source.length} cues` + (flagged.length ? ` · flagged: ${flagged.join(", ")} — play and check these first` : "");
 
       const dl = $("teDownloads");
       dl.innerHTML = "";
@@ -752,9 +768,10 @@
       }
       const hasReview = rows.length > 0;
       $("translateBtn").textContent = hasReview ? "Save & re-translate to English →" : "Save & translate to English →";
-      $("translateHint").textContent = hasReview
+      $("translateHint").textContent = (hasReview
         ? "Re-translating replaces the English draft and clears saved corrections."
-        : "Translation uses the Telugu cues exactly as they are here, so fix recognition errors first.";
+        : "Translation uses the Telugu cues exactly as they are here, so fix recognition errors first.")
+        + (count("missing") ? " Cues left blank are skipped in the translation and the downloads." : "");
     }
     $("sourceFilter").addEventListener("change", renderSource);
 
@@ -794,7 +811,7 @@
     $("player").addEventListener("pause", () => { if (playingRow) playingRow.classList.remove("playing"); playingRow = null; });
 
     async function saveSource() {
-      const bad = source.findIndex((c) => !c.text.trim());
+      const bad = source.findIndex((c) => !c.text.trim() && c.review !== "missing");
       if (bad >= 0) { setMsg("sourceMsg", `Cue #${bad + 1} is empty — type its text or delete it.`, "err"); return false; }
       try {
         const res = await apiJson(`/api/jobs/${job.id}/source`, {

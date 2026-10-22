@@ -35,12 +35,14 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 import secrets
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -70,6 +72,8 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))  # 2
 MAX_AUDIO_BYTES = int(os.getenv("MAX_AUDIO_BYTES", str(300 * 1024 * 1024)))  # 300 MB audio
 RETENTION_HOURS = float(os.getenv("RETENTION_HOURS", "24"))
 CLEANUP_INTERVAL_SEC = 15 * 60
+
+REVIEW_FLAGS = ("missing", "recovered", "low")  # see transcribe.build_cues
 
 SUBTITLE_EXTS = {".sbv", ".srt"}
 AUDIO_EXTS = {".mp3", ".mpeg", ".mpga", ".m4a", ".mp4", ".wav", ".ogg", ".oga", ".opus", ".webm", ".flac", ".aac"}
@@ -210,8 +214,27 @@ def _cleanup_loop() -> None:
         time.sleep(CLEANUP_INTERVAL_SEC)
 
 
+def _quiet_client_disconnects(loop: asyncio.AbstractEventLoop) -> None:
+    """On Windows, asyncio logs a ConnectionResetError traceback whenever a browser drops
+    a connection, which the audio player does each time it seeks. Nothing is wrong, so
+    those are not logged; everything else still is."""
+    previous = loop.get_exception_handler()
+
+    def handler(loop: asyncio.AbstractEventLoop, context: Dict[str, Any]) -> None:
+        if isinstance(context.get("exception"), ConnectionResetError):
+            return
+        if previous:
+            previous(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    if sys.platform == "win32":
+        _quiet_client_disconnects(asyncio.get_running_loop())
     load_jobs()
     cleanup_expired()
     threading.Thread(target=_cleanup_loop, daemon=True).start()
@@ -290,22 +313,26 @@ def _clean_cues(items: Any, text_key: str = "text") -> List[Dict[str, Any]]:
         except (KeyError, ValueError, TypeError):
             raise HTTPException(status_code=400, detail=f"Cue {i}: invalid start/end time.")
         text = str(item.get(text_key) or "").strip()
+        review = item.get("review") if item.get("review") in REVIEW_FLAGS else None
+        if text and review == "missing":
+            review = None  # the reviewer typed what is said there
         if end <= start:
             raise HTTPException(status_code=400, detail=f"Cue {i}: end time must be after start time.")
-        if not text:
+        if not text and review != "missing":
             raise HTTPException(status_code=400, detail=f"Cue {i}: text is empty (delete the cue instead).")
         cues.append({
             "start": pipeline.seconds_to_srt_ts(start),
             "end": pipeline.seconds_to_srt_ts(end),
             "text": text,
             "confidence": item["confidence"] if isinstance(item.get("confidence"), (int, float)) else None,
+            "review": review,
         })
     cues.sort(key=lambda c: pipeline.ts_to_seconds(c["start"]))
     return cues
 
 
 def _source_cues(job: Job) -> List[pipeline.Cue]:
-    items = _read_json(job.path("source.json"), [])
+    items = [c for c in _read_json(job.path("source.json"), []) if c["text"]]  # skip unfilled blanks
     return [pipeline.Cue(i, c["start"], c["end"], c["text"]) for i, c in enumerate(items, 1)]
 
 
@@ -376,7 +403,8 @@ async def create_job(
             except Exception as err:
                 raise HTTPException(status_code=400, detail=f"Could not parse subtitle file: {err}")
             _write_json(job.path("source.json"),
-                        [{"start": c.start, "end": c.end, "text": c.telugu, "confidence": None} for c in cues])
+                        [{"start": c.start, "end": c.end, "text": c.telugu, "confidence": None, "review": None}
+                         for c in cues])
             job.cue_count = len(cues)
             job.progress.append(f"Loaded {len(cues)} cues from {filename}. Review them, then translate.")
     except HTTPException:
@@ -389,19 +417,22 @@ async def create_job(
 
     if kind == "audio":
         def work(progress: Callable[[str], None]) -> str:
-            progress("Compressing audio...")
-            compact = job.path("audio.mp3")
-            transcribe.make_compact_audio(upload_path, compact)
-            upload_path.unlink(missing_ok=True)  # the compact copy serves Azure and the editor
+            progress("Preparing audio...")
+            transcribe.make_compact_audio(upload_path, job.path("audio.mp3"))  # for the editor's player
+            speech = transcribe.make_speech_audio(upload_path, job.dir)  # lossless, for Azure
+            upload_path.unlink(missing_ok=True)
             with _LOCK:
                 job.has_audio = True
-            cues = transcribe.transcribe_audio(compact, context_hint=job.options["context_hint"], progress=progress)
+            try:
+                cues = transcribe.transcribe_audio(speech, context_hint=job.options["context_hint"], progress=progress)
+            finally:
+                speech.unlink(missing_ok=True)
             source = [{"start": pipeline.seconds_to_srt_ts(c["start"]), "end": pipeline.seconds_to_srt_ts(c["end"]),
-                       "text": c["text"], "confidence": c["confidence"]} for c in cues]
+                       "text": c["text"], "confidence": c["confidence"], "review": c["review"]} for c in cues]
             _write_json(job.path("source.json"), source)
             with _LOCK:
                 job.cue_count = len(source)
-            progress("Review the Telugu cues (low-confidence ones are highlighted), then translate.")
+            progress("Review the Telugu cues (flagged ones are highlighted), then translate.")
             return SOURCE
 
         _start_step(job, TRANSCRIBING, FAILED, work)
@@ -581,7 +612,7 @@ def download(
         items = _read_json(job.path("source.json"))
         if not items:
             raise HTTPException(status_code=404, detail="Transcript is not ready yet.")
-        body = pipeline.format_subtitles(((c["start"], c["end"], c["text"]) for c in items), fmt)
+        body = pipeline.format_subtitles(((c["start"], c["end"], c["text"]) for c in items if c["text"]), fmt)
         return text_file(body, f"{job.stem}_telugu.{fmt}")
 
     rows = _read_json(job.path("review.json"))
