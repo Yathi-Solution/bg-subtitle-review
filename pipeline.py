@@ -176,7 +176,8 @@ def safe_stem(name: str) -> str:
 # Writing subtitles
 # --------------------------------------------------------------------------- #
 def wrap_subtitle(text: str, max_chars: int = MAX_LINE_CHARS) -> str:
-    """Keep author line breaks; otherwise split long text into two balanced lines."""
+    """Keep author line breaks; otherwise split long text into two balanced lines,
+    breaking after punctuation when that is near the middle and keeps both lines short."""
     text = text.strip()
     if "\n" in text:
         return "\n".join(" ".join(line.split()) for line in text.splitlines() if line.strip())
@@ -184,7 +185,13 @@ def wrap_subtitle(text: str, max_chars: int = MAX_LINE_CHARS) -> str:
     if len(_strip_markup(text)) <= max_chars or " " not in text:
         return text
     mid = len(text) / 2
-    best = min((i for i, ch in enumerate(text) if ch == " "), key=lambda i: abs(i - mid))
+
+    def cost(i: int) -> Tuple[bool, float]:
+        too_long = max(len(_strip_markup(text[:i])), len(_strip_markup(text[i + 1:]))) > max_chars
+        after_punct = text[i - 1] in ".?!,;:।"
+        return too_long, abs(i - mid) - (0.15 * len(text) if after_punct else 0.0)
+
+    best = min((i for i, ch in enumerate(text) if ch == " "), key=cost)
     return text[:best] + "\n" + text[best + 1:]
 
 
