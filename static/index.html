@@ -215,7 +215,44 @@
     .finding .sugg { margin: 6px 0; font-style: italic; }
     .finding.stale { opacity: 0.6; }
 
+    /* Top navigation */
+    .nav { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; margin: -6px 0 18px; }
+    .nav .tab { padding: 8px 16px; }
+    .nav input { width: 210px; padding: 8px 12px; font-size: 0.88rem; }
+
+    /* Playlist dashboard */
+    .pl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+    .pl-head h2 a { color: inherit; text-decoration: none; }
+    .pl-head h2 a:hover { text-decoration: underline; }
+    .counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .count { width: auto; padding: 5px 12px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .count.active { border-color: var(--brand-2); color: var(--brand-2); background: var(--hl); }
+    .count b { margin-left: 4px; }
+    .vids { display: grid; gap: 10px; }
+    .vid { display: grid; grid-template-columns: 128px 1fr auto; gap: 14px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+    .vid img, .vid .thumb { width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: var(--border); display: block; }
+    .vid .title { font-weight: 600; color: var(--text); text-decoration: none; word-break: break-word; }
+    .vid .title:hover { text-decoration: underline; }
+    .vid .meta { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+    .vid .line { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+    .vid .note { font-size: 0.8rem; color: var(--muted); margin-top: 4px; word-break: break-word; }
+    .vid .note.err { color: var(--err); }
+    .vid .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 360px; }
+    .vid .panel { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px; border: 1px dashed var(--border); border-radius: 10px; font-size: 0.88rem; }
+    .vid .panel select { width: auto; padding: 6px 10px; font-size: 0.85rem; }
+    .vid .panel input[type="file"] { font-size: 0.82rem; max-width: 260px; }
+    .badge.info { background: rgba(47,109,181,0.12); color: var(--brand-2); }
+    #plMsg:empty, #plSyncErr:empty { display: none; }
+    #jobMeta a { color: var(--brand-2); }
+    .approval { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); margin-bottom: 12px; font-size: 0.9rem; }
+    .approval.ok { border-color: var(--ok); }
+    .approval .grow { flex: 1 1 auto; }
+
     @media (max-width: 760px) {
+      .vid { grid-template-columns: 88px 1fr; }
+      .vid img, .vid .thumb { width: 88px; }
+      .vid .acts { grid-column: 1 / -1; justify-content: flex-start; max-width: none; }
+      .nav input { width: 100%; }
       .cue { grid-template-columns: 1fr; }
       .num { padding-top: 0; }
       .times { grid-template-columns: 1fr 1fr; }
@@ -232,6 +269,13 @@
       <h1>Telugu → English Subtitle Review</h1>
       <p>Audio or <code>.sbv</code>/<code>.srt</code> → reviewed Telugu subtitles → AI English draft → human review → export</p>
     </header>
+
+    <nav id="nav" class="nav hidden" aria-label="Sections">
+      <button class="tab" data-nav="" type="button">Jobs</button>
+      <button class="tab" data-nav="youtube" type="button">YouTube playlist</button>
+      <input id="reviewerName" type="text" maxlength="100" autocomplete="name"
+        placeholder="Your name (for approvals)" aria-label="Your name, recorded with approvals" />
+    </nav>
 
     <!-- LOGIN -->
     <section id="loginCard" class="card">
@@ -327,6 +371,7 @@
           </div>
         </div>
         <div id="teDownloads" class="toolbar"></div>
+        <div id="teApproval" class="approval hidden"></div>
         <div id="sourceSummary" class="summary"></div>
         <p id="sourceMsg" class="msg"></p>
         <div id="cueList" class="cues"></div>
@@ -370,10 +415,52 @@
           </div>
           <div id="enDownloads" class="toolbar" style="margin:10px 0 0;"></div>
         </div>
+        <div id="enApproval" class="approval hidden"></div>
         <div id="reviewSummary" class="summary"></div>
         <p id="reviewMsg" class="msg"></p>
         <div id="reviewList" class="cues"></div>
       </section>
+    </div>
+
+    <!-- YOUTUBE PLAYLIST -->
+    <div id="playlistView" class="hidden">
+      <section class="card">
+        <div class="pl-head">
+          <div>
+            <h2 id="plTitle" style="margin:0;">YouTube playlist</h2>
+            <p class="hint" id="plMeta"></p>
+          </div>
+          <button id="syncBtn" class="sm" type="button">⟳ Sync latest videos</button>
+        </div>
+        <div id="plCounts" class="counts"></div>
+        <p id="plSyncErr" class="msg err"></p>
+        <p id="plMsg" class="msg"></p>
+      </section>
+
+      <section class="card">
+        <div class="toolbar">
+          <select id="plFilter" class="filter" aria-label="Filter videos">
+            <option value="all">All videos</option>
+            <option value="not_started">Not started</option>
+            <option value="confirm">Needs confirmation</option>
+            <option value="progress">In progress</option>
+            <option value="review">In review</option>
+            <option value="failed">Failed</option>
+            <option value="generated">Completed · Generated</option>
+            <option value="original">Completed · Original</option>
+          </select>
+          <input id="plSearch" type="text" placeholder="Search titles" aria-label="Search titles"
+            style="flex:1 1 200px;width:auto;padding:8px 12px;font-size:0.9rem;" />
+          <select id="plSort" class="filter" aria-label="Sort videos">
+            <option value="playlist">Playlist order</option>
+            <option value="newest">Newest first</option>
+          </select>
+        </div>
+        <div id="plList" class="vids"><p class="empty">Loading…</p></div>
+        <input id="plUpload" type="file" class="hidden"
+          accept=".mp3,.mpeg,.mpga,.m4a,.mp4,.wav,.ogg,.oga,.opus,.webm,.flac,.aac,.sbv,.srt,audio/*" />
+      </section>
+      <p class="hint" id="plFoot" style="text-align:center;"></p>
     </div>
 
     <div style="text-align:center;">
@@ -413,6 +500,27 @@
     let activeTab = "source";
     let pollTimer = null;
     let stopAt = null, playingRow = null;
+    // Playlist dashboard. The reviewer's name is recorded with approvals and confirmations
+    // (the app has one shared password, no accounts).
+    const RKEY = "subtitle_reviewer";
+    let reviewer = localStorage.getItem(RKEY) || "";
+    let pl = null;                                   // last GET /api/youtube/videos
+    let plConfirmOpen = null, plUploadFor = null;    // video_id of an open "confirm original" panel / upload
+    const YT_BUSY = new Set(["queued", "downloading", "transcribing", "translating"]);
+    const CATEGORY = {
+      not_started: { label: "Not started", badge: "" },
+      confirm: { label: "Needs confirmation", badge: "warn" },
+      progress: { label: "In progress", badge: "info" },
+      review: { label: "In review", badge: "info" },
+      failed: { label: "Failed", badge: "err" },
+      generated: { label: "Completed · Generated", badge: "ok" },
+      original: { label: "Completed · Original", badge: "ok" },
+    };
+    const WORKFLOW = {
+      queued: "Queued", downloading: "Downloading audio", transcribing: "Transcribing", translating: "Translating",
+      telugu_review: "In review: Telugu", telugu_approved: "Telugu approved · ready to translate",
+      english_review: "In review: English",
+    };
 
     // ---------- helpers ----------
     function el(tag, props = {}, ...kids) {
@@ -452,6 +560,20 @@
       if (h >= 48) return `deleted in ${Math.floor(h / 24)} days ${h % 24} h`;
       return h ? `deleted in ${h} h ${m} min` : `deleted in ${m} min`;
     }
+    const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
+    const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
+    function fmtDuration(sec) {
+      if (!sec) return "";
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60, p = (x) => String(x).padStart(2, "0");
+      return h ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+    }
+    function ago(iso) {
+      const s = (Date.now() - new Date(iso)) / 1000;
+      if (s < 60) return "just now";
+      if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+      return fmtDateTime(iso);
+    }
     const retentionText = () => retentionHours >= 48 && retentionHours % 24 === 0
       ? `${retentionHours / 24} days` : `${retentionHours} hours`;
     const plain = (t) => String(t || "").replace(/\*/g, "");
@@ -467,8 +589,10 @@
     }
 
     // ---------- API ----------
+    // Header values must be Latin-1, so the name is URL-encoded (the server decodes it).
+    const reviewerHeader = () => (reviewer ? { "X-Reviewer": encodeURIComponent(reviewer) } : {});
     async function api(path, opts = {}) {
-      const res = await fetch(path, { ...opts, headers: { "X-App-Password": password, ...(opts.headers || {}) } });
+      const res = await fetch(path, { ...opts, headers: { "X-App-Password": password, ...reviewerHeader(), ...(opts.headers || {}) } });
       if (res.status === 401) { logout(); throw new Error("Locked"); }
       return res;
     }
@@ -518,6 +642,8 @@
     function unlocked() {
       show("loginCard", false);
       show("logoutBtn");
+      show("nav");
+      $("reviewerName").value = reviewer;
       $("retentionNote").textContent = `Files are kept for ${retentionText()} after upload, then deleted automatically.`;
       route();
     }
@@ -531,7 +657,10 @@
     // ---------- routing ----------
     function route() {
       const m = location.hash.match(/job=([0-9a-f]+)/);
-      if (m) openJob(m[1]); else showHome();
+      if (m) openJob(m[1]); else if (location.hash === "#youtube") showPlaylist(); else showHome();
+      document.querySelectorAll("#nav .tab").forEach((t) => {
+        t.classList.toggle("active", !m && (t.dataset.nav === "youtube") === (location.hash === "#youtube"));
+      });
     }
     window.addEventListener("hashchange", () => { if (password) route(); });
     function confirmLeave() {
@@ -545,7 +674,7 @@
       $("player").pause();
       job = null; sourceDirty = reviewDirty = false;
       $("wrap").classList.remove("wide");
-      show("jobView", false); show("homeView");
+      show("jobView", false); show("playlistView", false); show("homeView");
       const list = $("jobsList");
       try {
         const jobs = await apiJson("/api/jobs");
@@ -628,7 +757,7 @@
     async function openJob(id) {
       clearInterval(pollTimer);
       source = []; rows = []; sourceDirty = reviewDirty = false;
-      show("homeView", false); show("jobView");
+      show("homeView", false); show("playlistView", false); show("jobView");
       $("wrap").classList.add("wide");
       setMsg("jobMsg", "");
       try {
@@ -667,9 +796,17 @@
     }
 
     function renderHeader() {
-      $("jobTitle").textContent = job.filename;
-      $("jobMeta").textContent = `${job.kind === "audio" ? "Audio" : "Subtitle"} upload · ${job.cue_count || "–"} cues · ${timeLeft(job.expires_at)}`;
+      const yt = job.youtube;
+      $("jobTitle").textContent = yt && yt.title ? yt.title : job.filename;
+      const kind = yt ? "Playlist video" : `${job.kind === "audio" ? "Audio" : "Subtitle"} upload`;
+      // Playlist videos are kept in the database, so the 7-day deletion only clears the working copy.
+      const life = yt ? "saved in the database" : timeLeft(job.expires_at);
+      $("jobMeta").replaceChildren(`${kind} · ${job.cue_count || "–"} cues · ${life}`,
+        yt ? " · " : "", yt ? el("a", { href: yt.url, target: "_blank", rel: "noopener" }, "▶ YouTube source") : "",
+        yt && yt.audio_track ? ` · audio: ${yt.audio_track}` : "");
+      $("backBtn").textContent = yt ? "← Playlist" : "← All jobs";
       const p = pill(job.state, job.error);
+      if (yt && job.state === "transcribing") p.lastChild.textContent = " Downloading & transcribing";
       $("statusPill").replaceWith(p); p.id = "statusPill";
       const showLog = job.busy || !!job.error || job.state === "failed";
       show("logBox", showLog);
@@ -680,7 +817,8 @@
       }
       setMsg("jobMsg", job.error ? job.error : "", job.error ? "err" : "");
       $("deleteBtn").disabled = job.busy;
-      ["translateBtn", "saveSourceBtn", "saveReviewBtn", "aiReviewBtn"].forEach((b) => { $(b).disabled = job.busy; });
+      ["saveSourceBtn", "saveReviewBtn", "aiReviewBtn"].forEach((b) => { $(b).disabled = job.busy; });
+      renderTranslateButton();
     }
 
     // Attach the job's audio to the player. Runs on every render: after an upload the
@@ -709,6 +847,74 @@
       show("reviewPane", hasReview && activeTab === "review");
       if (hasSource) renderSource();
       if (hasReview) renderReview();
+    }
+
+    // ---------- approvals (playlist videos only) ----------
+    function approvalBar(id, stage) {
+      const yt = job.youtube, box = $(id);
+      box.replaceChildren();
+      box.className = "approval";
+      if (yt.error) return box.append(el("span", { class: "msg err", style: "margin:0" }, yt.error));
+      if (yt.current === false) return box.append("This is an older job of this video; approvals belong to its current job.");
+      const by = yt[`${stage}_approved_by`], at = yt[`${stage}_approved_at`];
+      if (by) {
+        box.classList.add("ok");
+        return box.append(el("span", { class: "badge ok" }, stage === "telugu" ? "✓ Telugu approved" : "✓ English approved · complete"),
+          ` by ${by} · ${fmtDateTime(at)}`,
+          el("span", { class: "hint", style: "margin:0" }, stage === "telugu"
+            ? "Editing the Telugu withdraws both approvals." : "Editing the English withdraws this approval."));
+      }
+      if (stage === "telugu") {
+        return box.append(el("span", { class: "badge warn" }, "Step 1 of 2"),
+          "Check every cue against the audio, then approve the Telugu. Translation unlocks after approval.",
+          el("span", { class: "grow" }), el("button", { class: "sm", type: "button", onclick: () => approve("telugu") }, "Approve Telugu"));
+      }
+      if (!yt.telugu_approved_by) return box.append(el("span", { class: "badge warn" }, "Step 2 of 2"), "Approve the Telugu first.");
+      if (!yt.english_fresh) return box.append(el("span", { class: "badge warn" }, "Step 2 of 2"),
+        "This English was translated from an earlier version of the Telugu. Re-translate on the Telugu tab before approving.");
+      box.append(el("span", { class: "badge warn" }, "Step 2 of 2"), "Review every English cue, then give the final approval.",
+        el("span", { class: "grow" }), el("button", { class: "sm", type: "button", onclick: () => approve("english") }, "Approve English (final)"));
+    }
+
+    function renderApprovals() {
+      const yt = job && job.youtube;
+      show("teApproval", !!yt); show("enApproval", !!yt);
+      if (!yt) return;
+      approvalBar("teApproval", "telugu");
+      approvalBar("enApproval", "english");
+    }
+
+    function needName(msgId) {
+      if (reviewer) return false;
+      setMsg(msgId, "Type your name in the box at the top first; it is recorded with the approval.", "err");
+      $("reviewerName").focus();
+      return true;
+    }
+
+    async function approve(stage) {
+      const msgId = stage === "telugu" ? "sourceMsg" : "reviewMsg";
+      if (needName(msgId)) return;
+      if (stage === "telugu" && sourceDirty && !(await saveSource())) return;
+      if (stage === "english" && reviewDirty && !(await saveReview())) return;
+      const question = stage === "telugu"
+        ? `Approve the Telugu subtitles as reviewed, as ${reviewer}?`
+        : `Give the final approval to the English subtitles, as ${reviewer}? The video then counts as completed.`;
+      if (!confirm(question)) return;
+      try {
+        job = await apiJson(`/api/jobs/${job.id}/approve`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage, reviewer }),
+        });
+        renderJob();
+        setMsg(msgId, stage === "telugu" ? "Telugu approved. You can translate now." : "English approved. This video is complete.", "ok");
+      } catch (e) { setMsg(msgId, e.message, "err"); }
+    }
+
+    // After a save, the server may have withdrawn approvals: fetch them again.
+    async function refreshApprovals() {
+      if (!job || !job.youtube) return;
+      try { job = await apiJson(`/api/jobs/${job.id}`); } catch (_) { return; }
+      renderApprovals();
+      renderTranslateButton();
     }
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => { activeTab = t.dataset.tab; renderJob(); }));
 
@@ -769,12 +975,21 @@
         const fmt = d.split(".")[1];
         dl.append(el("button", { class: "ghost", type: "button", onclick: () => saveThen(() => download(`/api/jobs/${job.id}/download/telugu?fmt=${fmt}`)) }, `Download .${fmt}`));
       }
+      renderTranslateButton();
+      renderApprovals();
+    }
+
+    function renderTranslateButton() {
       const hasReview = rows.length > 0;
+      const blocked = !!(job.youtube && job.youtube.current !== false && !job.youtube.telugu_approved_by);
       $("translateBtn").textContent = hasReview ? "Save & re-translate to English →" : "Save & translate to English →";
-      $("translateHint").textContent = (hasReview
-        ? "Re-translating replaces the English draft and clears saved corrections."
-        : "Translation uses the Telugu cues exactly as they are here, so fix recognition errors first.")
-        + (count("missing") ? " Cues left blank are skipped in the translation and the downloads." : "");
+      $("translateBtn").disabled = job.busy || blocked;
+      const blanks = source.filter((c) => c.review === "missing").length;
+      $("translateHint").textContent = blocked ? "Approve the Telugu first (above the cues); translation unlocks after approval."
+        : (hasReview
+          ? "Re-translating replaces the English draft and clears saved corrections."
+          : "Translation uses the Telugu cues exactly as they are here, so fix recognition errors first.")
+          + (blanks ? " Cues left blank are skipped in the translation and the downloads." : "");
     }
     $("sourceFilter").addEventListener("change", renderSource);
 
@@ -823,6 +1038,7 @@
         sourceDirty = false;
         source = await apiJson(`/api/jobs/${job.id}/source`);
         job.cue_count = res.cue_count;
+        if (job.youtube) { try { job = await apiJson(`/api/jobs/${job.id}`); } catch (_) { /* keep the old copy */ } }
         renderSource(); renderHeader();
         setMsg("sourceMsg", res.translation_stale ? "Saved. The English draft was made from the earlier Telugu — re-translate to update it." : "Saved.", "ok");
         return true;
@@ -937,6 +1153,7 @@
         reviewDirty = false;
         rows = await apiJson(`/api/jobs/${job.id}/review`);
         renderReview();
+        await refreshApprovals();
         setMsg("reviewMsg", `Saved · ${res.corrected} corrected cues.`, "ok");
         return true;
       } catch (e) {
@@ -956,14 +1173,263 @@
       } catch (e) { setMsg("reviewMsg", e.message, "err"); }
     });
 
+    // ---------- YouTube playlist dashboard ----------
+    async function showPlaylist() {
+      clearInterval(pollTimer);
+      $("player").pause();
+      job = null; sourceDirty = reviewDirty = false;
+      show("homeView", false); show("jobView", false); show("playlistView");
+      $("wrap").classList.add("wide");
+      setMsg("plMsg", ""); plConfirmOpen = null;
+      await loadPlaylist();
+    }
+
+    const plBusy = () => !!pl && pl.videos.some((v) => v.busy || YT_BUSY.has(v.workflow_status));
+
+    async function loadPlaylist() {
+      try {
+        pl = await apiJson("/api/youtube/videos");
+        renderPlaylist();
+      } catch (e) {
+        pl = null;
+        $("plTitle").textContent = "YouTube playlist";
+        $("plMeta").textContent = "";
+        $("plCounts").replaceChildren();
+        $("plList").replaceChildren(el("p", { class: "msg err" }, e.message));
+        $("plFoot").textContent = "";
+      }
+      clearInterval(pollTimer);
+      if (plBusy()) {
+        pollTimer = setInterval(async () => {
+          if (location.hash !== "#youtube") return clearInterval(pollTimer);
+          try {
+            pl = await apiJson("/api/youtube/videos");
+            if (!plConfirmOpen) renderPlaylist();  // don't wipe a half-filled confirm panel
+            if (!plBusy()) clearInterval(pollTimer);
+          } catch (_) { /* keep polling */ }
+        }, 4000);
+      }
+    }
+
+    function renderPlaylist() {
+      const title = pl.playlist_title || "YouTube playlist";
+      $("plTitle").replaceChildren(el("a", { href: pl.playlist_url, target: "_blank", rel: "noopener" }, title));
+      const ls = pl.last_sync;
+      $("plMeta").textContent = ls
+        ? `${pl.videos.length} videos · last synced ${ago(ls.started_at)}${ls.actor ? ` by ${ls.actor}` : ""}`
+          + (ls.error ? "" : ` · ${ls.new_count} new`)
+        : "Not synced yet. Click “Sync latest videos” to read the playlist from YouTube.";
+      setMsg("plSyncErr", ls && ls.error ? `The last sync failed: ${ls.error}` : "", "err");
+
+      const filter = $("plFilter").value;
+      const counts = $("plCounts");
+      counts.replaceChildren();
+      const chip = (key, label, n) => el("button", {
+        class: "count" + (filter === key ? " active" : ""), type: "button",
+        onclick: () => { $("plFilter").value = filter === key ? "all" : key; renderPlaylist(); },
+      }, label, el("b", {}, String(n)));
+      counts.append(chip("all", "All", pl.videos.length));
+      for (const [key, c] of Object.entries(CATEGORY)) if (pl.counts[key]) counts.append(chip(key, c.label, pl.counts[key]));
+
+      const q = $("plSearch").value.trim().toLowerCase();
+      let list = pl.videos.filter((v) => (filter === "all" || v.category === filter) && (!q || v.title.toLowerCase().includes(q)));
+      if ($("plSort").value === "newest") list = [...list].sort((a, b) => String(b.published_at).localeCompare(String(a.published_at)));
+      const box = $("plList");
+      box.replaceChildren();
+      if (!pl.videos.length) box.append(el("p", { class: "empty" }, "No videos yet. Sync to read the playlist."));
+      else if (!list.length) box.append(el("p", { class: "empty" }, "No videos match."));
+      for (const v of list) box.append(videoRow(v));
+      $("plFoot").textContent = `Audio: the original track, downloaded with yt-dlp ${pl.ytdlp_version || "(not installed on the server)"}`
+        + ` · preferred language when no track is marked original: ${pl.audio_lang}`;
+    }
+
+    function statusBadge(v) {
+      const c = CATEGORY[v.category];
+      if (v.category === "progress") {
+        return el("span", { class: "status-pill" }, el("span", { class: "spinner" }), " " + (WORKFLOW[v.workflow_status] || "Working"));
+      }
+      const label = v.category === "review" ? WORKFLOW[v.workflow_status] || c.label : c.label;
+      return el("span", { class: "badge " + c.badge }, (v.category === "generated" || v.category === "original" ? "✓ " : "") + label);
+    }
+
+    function videoRow(v) {
+      const thumb = v.thumbnail_url ? el("img", { src: v.thumbnail_url, alt: "", loading: "lazy" }) : el("div", { class: "thumb" });
+      const notes = [];
+      if (v.busy && v.last_progress) notes.push(el("div", { class: "note" }, v.last_progress));
+      if (v.category === "failed" && v.last_error) notes.push(el("div", { class: "note err" }, v.last_error));
+      if (v.category === "original") notes.push(el("div", { class: "note" }, `Confirmed original by ${v.original_by || "?"} · ${fmtDateTime(v.original_at)}`));
+      const approved = [
+        v.telugu_approved_by && `Telugu approved by ${v.telugu_approved_by} (${fmtDate(v.telugu_approved_at)})`,
+        v.english_approved_by && `English approved by ${v.english_approved_by} (${fmtDate(v.english_approved_at)})`,
+      ].filter(Boolean);
+      if (approved.length && v.category !== "original") notes.push(el("div", { class: "note" }, approved.join(" · ")));
+      const row = el("div", { class: "vid" },
+        el("a", { href: v.url, target: "_blank", rel: "noopener", "aria-label": "Open on YouTube" }, thumb),
+        el("div", {},
+          el("a", { class: "title", href: v.url, target: "_blank", rel: "noopener" }, v.title),
+          el("div", { class: "meta" }, [fmtDate(v.published_at), fmtDuration(v.duration_sec)].filter(Boolean).join(" · ")),
+          el("div", { class: "line" }, statusBadge(v),
+            v.is_new ? el("span", { class: "badge info" }, "NEW") : null,
+            v.yt_caption_flag && v.category !== "original" ? el("span", { class: "badge", title:
+              "YouTube's API says captions are available. It does not say whether a person uploaded them, in which language, or whether they are YouTube's automatic captions." },
+              "YouTube reports captions") : null),
+          notes),
+        el("div", { class: "acts" }, videoActions(v)));
+      if (plConfirmOpen === v.video_id) row.append(confirmPanel(v));
+      return row;
+    }
+
+    function videoActions(v) {
+      const btn = (label, fn, primary = false) => el("button", { class: primary ? "sm" : "ghost", type: "button", onclick: fn }, label);
+      const out = [];
+      switch (v.category) {
+        case "confirm":
+          out.push(btn("Confirm original", () => { plConfirmOpen = v.video_id; renderPlaylist(); }, true),
+            btn("Not original — Generate", () => notOriginalThenGenerate(v)));
+          break;
+        case "not_started":
+          out.push(btn("Generate SRT/SBV", () => generate(v), true), btn("Upload audio instead", () => uploadFor(v)));
+          break;
+        case "failed":
+          out.push(btn("Retry", () => generate(v), true), btn("Upload audio instead", () => uploadFor(v)));
+          if (v.job_alive) out.push(btn("Open job", () => openVideo(v)));
+          break;
+        case "progress":
+          out.push(btn("Open job", () => openVideo(v)));
+          break;
+        case "review":
+          out.push(btn("Open review", () => openVideo(v), true));
+          break;
+        case "generated":
+          out.push(btn("Open review", () => openVideo(v)));
+          break;
+        case "original":
+          out.push(el("button", { class: "linkbtn", type: "button", title: "Undo the confirmation",
+            onclick: () => setOriginal(v, "unknown") }, "Undo"));
+          break;
+      }
+      for (const f of v.files) {
+        const label = `${f.language === "te" ? "TE" : "EN"} .${f.format}${f.source_type === "youtube_original" ? " (original)" : ""}`;
+        out.push(el("button", { class: "ghost", type: "button", "aria-label": `Download ${label}, version ${f.version}`,
+          title: `Version ${f.version}${f.created_by ? `, by ${f.created_by}` : ""}`,
+          onclick: () => download(`/api/youtube/videos/${v.video_id}/subtitles?source=${f.source_type}&stage=${f.stage}&lang=${f.language}&fmt=${f.format}`) }, "⬇ " + label));
+      }
+      return out;
+    }
+
+    function confirmPanel(v) {
+      const lang = el("select", { "aria-label": "Language of the attached file" },
+        el("option", { value: "en" }, "English"), el("option", { value: "te" }, "Telugu"));
+      const file = el("input", { type: "file", accept: ".srt,.sbv", "aria-label": "Original caption file (optional)" });
+      return el("div", { class: "panel" },
+        "Confirm that this video's YouTube captions are original (uploaded by the channel). Optionally attach a copy:",
+        file, lang,
+        el("button", { class: "sm", type: "button", onclick: () => setOriginal(v, "confirmed", file.files[0], lang.value) }, "Confirm"),
+        el("button", { class: "ghost", type: "button", onclick: () => { plConfirmOpen = null; renderPlaylist(); } }, "Cancel"));
+    }
+
+    async function setOriginal(v, decision, file, language) {
+      if (decision !== "unknown" && needName("plMsg")) return;
+      const fd = new FormData();
+      fd.append("decision", decision);
+      fd.append("reviewer", reviewer);
+      if (file) { fd.append("file", file); fd.append("language", language || "en"); }
+      try {
+        await apiJson(`/api/youtube/videos/${v.video_id}/original`, { method: "POST", body: fd });
+        plConfirmOpen = null;
+        setMsg("plMsg", decision === "confirmed" ? `Marked “${v.title}” as having original captions.`
+          : decision === "unknown" ? "Undone." : "", "ok");
+        await loadPlaylist();
+        return true;
+      } catch (e) { setMsg("plMsg", e.message, "err"); return false; }
+    }
+
+    async function notOriginalThenGenerate(v) {
+      if (needName("plMsg")) return;
+      if (await setOriginal(v, "not_original")) await generate(v);
+    }
+
+    async function generate(v) {
+      try {
+        await apiJson(`/api/youtube/videos/${v.video_id}/generate`, { method: "POST" });
+        setMsg("plMsg", `Started “${v.title}”: downloading the original audio, then transcribing. This list updates by itself.`, "ok");
+      } catch (e) { setMsg("plMsg", e.message, "err"); }
+      await loadPlaylist();
+    }
+
+    async function openVideo(v) {
+      try {
+        const res = await apiJson(`/api/youtube/videos/${v.video_id}/open`, { method: "POST" });
+        location.hash = "job=" + res.job_id;
+      } catch (e) { setMsg("plMsg", e.message, "err"); }
+    }
+
+    function uploadFor(v) { plUploadFor = v; $("plUpload").value = ""; $("plUpload").click(); }
+
+    $("plUpload").addEventListener("change", () => {
+      const file = $("plUpload").files[0], v = plUploadFor;
+      if (!file || !v) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("formats", "sbv,srt");
+      fd.append("youtube_video_id", v.video_id);
+      const xhr = new XMLHttpRequest();  // XHR (not fetch) so large audio uploads can show progress
+      xhr.open("POST", "/api/jobs");
+      xhr.setRequestHeader("X-App-Password", password);
+      if (reviewer) xhr.setRequestHeader("X-Reviewer", encodeURIComponent(reviewer));
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) setMsg("plMsg", `Uploading ${file.name} for “${v.title}”… ${Math.round(100 * ev.loaded / ev.total)}%`);
+      };
+      xhr.onload = () => {
+        if (xhr.status === 401) return logout();
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (_) { /* ignore */ }
+        if (xhr.status >= 400) return setMsg("plMsg", data.detail || "Upload failed.", "err");
+        setMsg("plMsg", "");
+        location.hash = "job=" + data.id;
+      };
+      xhr.onerror = () => setMsg("plMsg", "Network error. Try again.", "err");
+      setMsg("plMsg", `Uploading ${file.name}…`);
+      xhr.send(fd);
+    });
+
+    $("syncBtn").addEventListener("click", async () => {
+      $("syncBtn").disabled = true;
+      setMsg("plMsg", "Reading the playlist from YouTube…");
+      try {
+        const res = await apiJson("/api/youtube/sync", { method: "POST" });
+        setMsg("plMsg", `Synced ${res.total} videos: ${res.new.length ? `${res.new.length} new (${res.new.slice(0, 3).join(", ")}${res.new.length > 3 ? ", …" : ""})` : "nothing new"}`
+          + (res.removed ? `, ${res.removed} no longer in the playlist` : "") + ".", "ok");
+      } catch (e) { setMsg("plMsg", e.message, "err"); }
+      $("syncBtn").disabled = false;
+      await loadPlaylist();
+    });
+    ["plFilter", "plSort"].forEach((id) => $(id).addEventListener("change", () => { if (pl) renderPlaylist(); }));
+    $("plSearch").addEventListener("input", () => { if (pl) renderPlaylist(); });
+
+    $("reviewerName").addEventListener("input", () => {
+      reviewer = $("reviewerName").value.trim();
+      localStorage.setItem(RKEY, reviewer);
+    });
+    document.querySelectorAll("#nav .tab").forEach((t) => t.addEventListener("click", () => {
+      if (!confirmLeave()) return;
+      sourceDirty = reviewDirty = false;
+      if (location.hash.replace("#", "") === t.dataset.nav) route(); else location.hash = t.dataset.nav;
+    }));
+
     // ---------- header actions ----------
-    $("backBtn").addEventListener("click", () => { if (confirmLeave()) { sourceDirty = reviewDirty = false; location.hash = ""; } });
+    $("backBtn").addEventListener("click", () => {
+      if (confirmLeave()) { sourceDirty = reviewDirty = false; location.hash = job && job.youtube ? "youtube" : ""; }
+    });
     $("deleteBtn").addEventListener("click", async () => {
-      if (!confirm("Delete this job and all its files now?")) return;
+      const yt = job.youtube;
+      if (!confirm(yt
+        ? "Delete this job's working files from the server now? Its text stays saved in the database, so the review can be reopened from the playlist."
+        : "Delete this job and all its files now?")) return;
       try {
         await apiJson(`/api/jobs/${job.id}`, { method: "DELETE" });
         sourceDirty = reviewDirty = false;
-        location.hash = "";
+        location.hash = yt ? "youtube" : "";
       } catch (e) { setMsg("jobMsg", e.message, "err"); }
     });
 

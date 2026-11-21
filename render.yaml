@@ -30,3 +30,11 @@ services:
         sync: false
       - key: RETENTION_HOURS
         value: "168"
+      # YouTube playlist dashboard (optional). Run `alembic upgrade head` against Neon
+      # from any machine (DATABASE_URL_UNPOOLED) before deploying a new schema version.
+      - key: DATABASE_URL
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_PLAYLIST_ID
+        sync: false

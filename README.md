@@ -137,8 +137,12 @@ because those pages show prices only after sign-in / region selection.
 pipeline.py    Parsing, SBV/SRT writing, translation, AI review, workbook (Azure OpenAI)
 transcribe.py  Audio -> timed Telugu cues (Azure AI Speech fast transcription)
 cli.py         Command-line interface
-app.py         FastAPI backend: jobs, editor API, downloads, 24 h cleanup
-static/        Responsive single-page web UI (upload, cue editor, review editor)
+app.py         FastAPI backend: jobs, editor API, downloads, 7-day cleanup, playlist dashboard API
+static/        Responsive single-page web UI (upload, cue editor, review editor, playlist dashboard)
+youtube.py     Playlist metadata (YouTube Data API) and original-audio download (yt-dlp)
+db.py          Neon Postgres access for the playlist dashboard (checks the schema, never changes it)
+migrations/    Alembic migrations that own the database schema (alembic.ini at the root)
+tests/         pytest: unit tests, and an end-to-end test against a throwaway Postgres
 render.yaml    One-click Render deployment blueprint
 .env.example   Template for environment variables (copy to .env)
 ```
@@ -201,7 +205,93 @@ Options: `--model` (Azure deployment override), `--chunk-size` (default 40),
 `--overlap` (default 3), `--skill` (skill markdown file), `--hint` (names/terms for
 speech-to-text).
 
-## 4. Deploy to Render
+## 4. YouTube playlist dashboard (optional)
+
+Instead of downloading and uploading each discourse by hand, the **YouTube playlist**
+tab tracks every video of one playlist and starts a job straight from YouTube.
+
+1. **Sync latest videos** reads the playlist through the official YouTube Data API
+   (an API key; public data only) and stores each video in Neon Postgres. New uploads
+   get a *NEW* badge. A sync of 300 videos costs about 13 of the 10,000 daily quota units.
+2. **Generate SRT/SBV** downloads the video's **original audio track** with yt-dlp,
+   then runs the same transcription as an upload. YouTube's auto-dubbing can add
+   AI-dubbed tracks to a video. The app downloads only the track YouTube marks as
+   *original*, never a dubbed one. If no track is marked, it takes `YOUTUBE_AUDIO_LANG`;
+   if several languages are offered and none is marked, it refuses rather than guess.
+   The chosen track is shown on the job page.
+3. **Two human approvals.** On the job page, *Approve Telugu* unlocks translation;
+   *Approve English (final)* completes the video. Editing the Telugu after approval
+   withdraws both approvals; editing the English withdraws the English one. Every
+   approved version is kept, with the reviewer's name (typed in the box at the top) and time.
+4. **Captions already on YouTube.** The API only says "captions are available". It
+   doesn't say whether a person uploaded them, in which language, or whether they are
+   automatic captions. Checking that needs the channel's OAuth sign-in. Such videos show
+   *Needs confirmation*: a person clicks **Confirm original** (optionally attaching the
+   original file) or **Not original — Generate**.
+5. **Nothing is lost after 7 days.** A playlist video's text (cues, corrections, brief,
+   approved files) is copied to Neon after every step and edit. If its job folder has
+   expired, **Open review** rebuilds it from the database and downloads the audio
+   again for the player. Audio is not stored in the database.
+
+| Dashboard status | Meaning |
+|---|---|
+| Not started | No captions reported by YouTube; nothing generated yet |
+| Needs confirmation | YouTube reports captions; a person decides whether they are original |
+| In progress | Queued, downloading, transcribing or translating |
+| In review | Telugu or English is waiting for review/approval |
+| Completed · Generated | Telugu **and** English approved |
+| Completed · Original | A person confirmed the YouTube captions are original |
+| Failed | Download or transcription failed: **Retry**, or **Upload audio instead** |
+
+**Downloads may be refused.** YouTube's Terms of Service and API Developer Policies
+restrict downloading content, and YouTube often blocks downloads from cloud servers
+("confirm you're not a bot"). The app uses plain yt-dlp and does not try to get around
+this (no proxies, cookies or token plugins). When a download is refused, the row says
+so and **Upload audio instead** attaches a file to that video. Everything else (tracking,
+approvals, storage) works the same.
+
+### Setup
+
+1. **Neon:** create a project and put both connection strings in `.env`:
+   `DATABASE_URL` (pooled, host contains `-pooler`) and `DATABASE_URL_UNPOOLED` (direct).
+2. **Create the tables** (versioned migrations; run again whenever a release adds one):
+
+   ```bash
+   alembic upgrade head      # uses DATABASE_URL_UNPOOLED
+   alembic current           # shows the revision the database is at
+   ```
+
+   The app never changes the schema itself. If the database is behind, the dashboard
+   says "run `alembic upgrade head`" and the rest of the app keeps working. Try a new
+   migration on a [Neon branch](https://neon.com/docs/introduction/branching) first.
+3. **YouTube Data API key:** Google Cloud console → enable *YouTube Data API v3* →
+   Credentials → API key, restricted to that API. Set `YOUTUBE_API_KEY` and
+   `YOUTUBE_PLAYLIST_ID` (the ID or the playlist URL).
+4. **Deno** (on the server): yt-dlp needs a JavaScript runtime for YouTube and uses
+   Deno by default. On the VM, put `deno.exe` in a folder on the *system* PATH (the
+   service runs as LocalSystem, not your user), then restart the service.
+5. **Check downloads on that server** before relying on them:
+
+   ```bash
+   python cli.py yt-audio VIDEO_ID --info-only   # lists the audio tracks and the one chosen
+   ```
+
+6. **Keep yt-dlp current.** YouTube changes often break older versions:
+   `pip install -U "yt-dlp[default]"`, then restart. The installed version is shown at
+   the bottom of the dashboard.
+
+Optional settings are in `.env.example` (`YOUTUBE_AUTO_SYNC_HOURS`, `YOUTUBE_MAX_CONCURRENT`, …).
+
+### Tests
+
+```bash
+pip install pytest
+pytest tests                                   # unit tests
+# end-to-end, against a throwaway database (it is wiped; the name must contain "test"):
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/subtitle_test pytest tests
+```
+
+## 5. Deploy to Render
 
 1. Push this repo to GitHub.
 2. In [Render](https://render.com): **New + → Blueprint**, pick this repo.
@@ -216,7 +306,7 @@ speech-to-text).
 > paid plan with a persistent disk (set `JOBS_DIR` to the disk's mount path). A step
 > that is running when the server restarts is marked as interrupted and can be re-run.
 
-## 5. Deploy to a Windows VM (current production setup)
+## 6. Deploy to a Windows VM (current production setup)
 
 The app also runs on an Azure Windows Server VM as two always-on Windows services:
 `SubtitleReview` (uvicorn) and `Caddy` (HTTPS reverse proxy). The VM's disk is
@@ -262,6 +352,7 @@ cd /d E:\apps\bg-subtitle-review
 net stop SubtitleReview
 git pull
 myenv\Scripts\pip.exe install -r requirements.txt
+myenv\Scripts\alembic.exe upgrade head
 net start SubtitleReview
 
 :: change a secret (a restart is required to load it)

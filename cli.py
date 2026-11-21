@@ -7,6 +7,8 @@ Examples:
     python cli.py transcribe episode.mp3 --formats sbv,srt --out-dir out_v4_1_lean
     python cli.py translate "CH 05 _EP 11.sbv" --out-dir out_v4_1_lean
     python cli.py validate-workbook "CH 05 _EP 11.sbv" out_v4_1_lean/CH_05__EP_11_master_review.xlsx
+    python cli.py yt-audio VIDEO_ID --info-only     # which audio track would be downloaded
+    python cli.py yt-audio VIDEO_ID --out-dir out   # download the original audio track
 """
 
 from __future__ import annotations
@@ -100,7 +102,38 @@ def cmd_validate_workbook(args: argparse.Namespace) -> None:
     sys.exit(0 if ok else 1)
 
 
+def cmd_yt_audio(args: argparse.Namespace) -> None:
+    """Check on a server that yt-dlp works there and picks the original track."""
+    import youtube
+
+    video_id = args.video
+    if "://" in video_id:  # a watch URL
+        import urllib.parse
+
+        parsed = urllib.parse.urlparse(video_id)
+        video_id = urllib.parse.parse_qs(parsed.query).get("v", [parsed.path.rsplit("/", 1)[-1]])[0]
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"yt-dlp {youtube.ytdlp_version() or '(not installed)'}")
+    try:
+        path, label, details = youtube.download_original_audio(
+            video_id, out_dir, progress=print, lang=args.lang, info_only=args.info_only)
+    except youtube.YouTubeError as err:
+        sys.exit(f"FAILED: {err}")
+    print(f"\n{details.get('title')} · {details.get('duration')} s")
+    print("Audio tracks offered:")
+    for t in details.get("audio_tracks", []):
+        mark = "  <- chosen" if label.startswith(f"{t['format_id']} ·") else ""
+        print(f"  {t['format_id']:>10}  {t['language'] or '-':<8} pref={t['language_preference']!s:<4} "
+              f"{t['ext']:<5} {t['abr'] or '?':>7}  {t['note'] or ''}{mark}")
+    print(f"\nChosen: {label}")
+    if path:
+        print(f"Saved: {path}")
+
+
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to a legacy code page
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         description="Telugu audio/subtitle -> English review workbook automation"
     )
@@ -126,6 +159,13 @@ def main() -> None:
     p.add_argument("source")
     p.add_argument("workbook")
     p.set_defaults(func=cmd_validate_workbook)
+
+    p = sub.add_parser("yt-audio", help="Show or download a YouTube video's original audio track")
+    p.add_argument("video", help="Video ID or watch URL")
+    p.add_argument("--info-only", action="store_true", help="List the audio tracks; download nothing")
+    p.add_argument("--lang", default="te", help="Preferred audio language when none is marked original")
+    p.add_argument("--out-dir", default="out_yt_audio")
+    p.set_defaults(func=cmd_yt_audio)
 
     args = parser.parse_args()
     args.func(args)
